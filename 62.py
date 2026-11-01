@@ -2,6 +2,7 @@
 """
 PDAC Risk Calculator — Publication Figure Generator.
 Generates a high-resolution, uncropped full-page mockup of the web calculator.
+Designed for Streamlit Cloud deployment with hardcoded standardization parameters.
 """
 import streamlit as st
 from pathlib import Path
@@ -9,14 +10,20 @@ import joblib
 import numpy as np
 import shap
 import pandas as pd
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import io
+import os
 
 # ============================================================
 # Plot style (journal-compatible)
 # ============================================================
 plt.rcParams.update({
-    "font.family": "Arial",
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
     "font.size": 10,
     "axes.labelsize": 10,
     "axes.titlesize": 10,
@@ -28,13 +35,32 @@ plt.rcParams.update({
 })
 
 # ============================================================
-# Paths and constants
+# 动态路径配置
 # ============================================================
-BASE_DIR = Path(r"C:/python/1/data")
-AA2_OUTPUT_DIR = Path(r"C:/python/1/output_matched_direct/bootstrap_data")
+CURRENT_DIR = Path(__file__).resolve().parent
+BASE_DIR = CURRENT_DIR / "data"
 
 EXPECTED_FEATURES = ["CEA", "DBIL", "Age", "SurgeryHistory", "CA19-9"]
 LOCKED_THRESHOLD = 0.50
+
+# ============================================================
+# 内置的标准化参数 (仅提取这 5 个特征)
+# ============================================================
+MEAN_DICT = {
+    "Age": 56.82857142857143,
+    "SurgeryHistory": 0.36,
+    "CA19-9": 11.651157142857143,
+    "CEA": 3.3454857142857146,
+    "DBIL": 5.3337142857142865
+}
+
+STD_DICT = {
+    "Age": 12.706209312853336,
+    "SurgeryHistory": 0.48,
+    "CA19-9": 8.803011427729416,
+    "CEA": 2.822665365232236,
+    "DBIL": 3.0664181857333026
+}
 
 
 # ============================================================
@@ -65,11 +91,16 @@ def _is_full_classifier(model, n):
 
 
 # ============================================================
-# Helpers (Model Loading)
+# 模型加载 (已移除 training_parameters_mice.pkl 的读取)
 # ============================================================
 @st.cache_resource
 def load_artifacts():
-    raw_model = joblib.load(BASE_DIR / "best_model.pkl")
+    raw_model_path = BASE_DIR / "best_model.pkl"
+    if not raw_model_path.exists():
+        st.error(f"找不到模型文件，请确认已上传至 `data/` 文件夹: {raw_model_path}")
+        st.stop()
+
+    raw_model = joblib.load(raw_model_path)
     predict_model = raw_model
 
     cal_path = BASE_DIR / "calibrated_model.pkl"
@@ -80,16 +111,17 @@ def load_artifacts():
         else:
             predict_model = _CalibratedPredictor(raw_model, cal_obj)
 
-    params_path = AA2_OUTPUT_DIR / "training_parameters_mice.pkl"
-    std_param = joblib.load(params_path)["standardize_param"]
-    mean_dict = dict(zip(std_param["num_cols"], std_param["means"]))
-    std_dict = dict(zip(std_param["num_cols"], std_param["stds"]))
+    X_train_path = BASE_DIR / "X_train.npy"
+    if not X_train_path.exists():
+        st.error(f"找不到背景数据文件: {X_train_path}")
+        st.stop()
 
-    X_train = np.load(BASE_DIR / "X_train.npy")
+    X_train = np.load(X_train_path)
     if X_train.shape[1] != len(EXPECTED_FEATURES):
         X_train = X_train[:, :len(EXPECTED_FEATURES)]
 
-    return predict_model, raw_model, EXPECTED_FEATURES, X_train, mean_dict, std_dict
+    # 直接返回硬编码的 mean_dict 和 std_dict
+    return predict_model, raw_model, EXPECTED_FEATURES, X_train, MEAN_DICT, STD_DICT
 
 
 @st.cache_resource
@@ -102,70 +134,57 @@ def _resolve_mean_std(name, mean_dict, std_dict):
 
 
 # ============================================================
-# 手写高定版瀑布图 (彻底告别 shap 的版本 Bug)
+# 手写高定版瀑布图
 # ============================================================
 def draw_custom_waterfall(ax, shap_vals, base_val, feature_names, feature_values):
-    # 按照绝对值从小到大排序（这样最大的影响会在最上面）
     order = np.argsort(np.abs(shap_vals))
     sv = shap_vals[order]
     names = [feature_names[i] for i in order]
     vals = [feature_values[i] for i in order]
 
     n = len(sv)
-    y_pos = np.arange(n)
-
-    # 累计值计算
     cum_vals = base_val + np.cumsum(sv)
     prev_cums = np.concatenate(([base_val], cum_vals[:-1]))
 
-    # 绘制柱状图
     for i in range(n):
         val = sv[i]
         start = prev_cums[i]
         width = val
-        color = '#ff0051' if val > 0 else '#008bfb'  # 经典 SHAP 红蓝配色
+        color = '#ff0051' if val > 0 else '#008bfb'
 
         ax.barh(i, width, left=start, height=0.6, color=color, edgecolor='none')
-
-        # 在柱子旁边写上具体的 SHAP 值
         text_x = start + width + (0.05 if width > 0 else -0.05)
         ha = 'left' if width > 0 else 'right'
         ax.text(text_x, i, f"{val:+.2f}", va='center', ha=ha, fontsize=9, color='#333')
 
-    # 标注左侧的特征和具体的输入值
     y_labels = [f"{names[i]} = {vals[i]:.2f}" for i in range(n)]
-    ax.set_yticks(y_pos)
+    ax.set_yticks(np.arange(n))
     ax.set_yticklabels(y_labels, fontsize=10)
 
-    # 添加基准线
     ax.axvline(base_val, color='#888', linestyle='--', linewidth=1)
     ax.text(base_val, n - 0.2, f"E[f(X)] = {base_val:.2f}", ha='center', va='bottom', fontsize=9, color='#555')
 
-    # 添加最终预测线
     final_val = cum_vals[-1]
     ax.axvline(final_val, color='#333', linestyle=':', linewidth=1)
     ax.text(final_val, n - 0.2, f"f(x) = {final_val:.2f}", ha='center', va='bottom', fontsize=9, color='#333')
 
-    # 坐标轴美化
     ax.set_xlabel("Model output (log-odds)", fontsize=10)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.spines['left'].set_visible(False)
-    ax.tick_params(axis='y', length=0)  # 隐藏 y 轴刻度线
+    ax.tick_params(axis='y', length=0)
 
 
 # ============================================================
-# Main Figure Generation Logic
+# 主绘图逻辑
 # ============================================================
 def generate_publication_figure(predict_model, explainer, mean_dict, std_dict, input_data):
-    # 1. 数据预处理
     x_raw = np.array([[input_data[f] for f in EXPECTED_FEATURES]], dtype=float)
     x_norm = np.zeros_like(x_raw)
     for i, f in enumerate(EXPECTED_FEATURES):
         m, s = _resolve_mean_std(f, mean_dict, std_dict)
         x_norm[0, i] = (x_raw[0, i] - m) / (s if s != 0 else 1.0)
 
-    # 2. 预测与 SHAP
     prob = float(predict_model.predict_proba(x_norm)[0, 1])
 
     sv = explainer.shap_values(x_norm)
@@ -176,12 +195,10 @@ def generate_publication_figure(predict_model, explainer, mean_dict, std_dict, i
     ev = explainer.expected_value
     base_val = float(ev[1]) if isinstance(ev, (list, np.ndarray)) and len(ev) > 1 else float(ev)
 
-    # 3. 开始绘制画布 (长图 10x12)
     fig = plt.figure(figsize=(10, 12), facecolor='white')
-    # 重新分配比例：标题 0.8，输入 1.5，结论 1.2，瀑布图 3.0，底部 0.5
     gs = fig.add_gridspec(5, 1, height_ratios=[0.8, 1.5, 1.2, 3.0, 0.5], hspace=0.5)
 
-    # ------------------ 1. 标题区 ------------------
+    # 1. 标题区
     ax_title = fig.add_subplot(gs[0])
     ax_title.axis('off')
     ax_title.text(0.5, 0.8, "PDAC Risk Calculator for Patients with Non-Elevated CA19-9",
@@ -189,7 +206,7 @@ def generate_publication_figure(predict_model, explainer, mean_dict, std_dict, i
     ax_title.text(0.5, 0.3, "Differentiating imaging-suspected early-stage PDAC from non-PDAC pancreatic lesions",
                   ha='center', va='center', fontsize=12, color='#555')
 
-    # ------------------ 2. 输入区 ------------------
+    # 2. 输入区
     ax_input = fig.add_subplot(gs[1])
     ax_input.axis('off')
     rect = patches.FancyBboxPatch((0.05, 0.05), 0.9, 0.9, boxstyle="round,pad=0.02",
@@ -214,7 +231,7 @@ def generate_publication_figure(predict_model, explainer, mean_dict, std_dict, i
                   fontsize=12, fontweight='bold', color='white',
                   bbox=dict(facecolor='#ff4b4b', edgecolor='none', boxstyle='round,pad=0.6', alpha=0.9))
 
-    # ------------------ 3. 结论区 ------------------
+    # 3. 结论区
     ax_result = fig.add_subplot(gs[2])
     ax_result.axis('off')
     risk_level = "High" if prob >= LOCKED_THRESHOLD else "Low"
@@ -227,32 +244,30 @@ def generate_publication_figure(predict_model, explainer, mean_dict, std_dict, i
     ax_result.text(0.5, 0.05, f"({risk_level} risk relative to 0.50 threshold)",
                    ha='center', va='center', fontsize=12, color=color)
 
-    # ------------------ 4. SHAP 瀑布图区 (使用手写函数) ------------------
+    # 4. SHAP 瀑布图区
     ax_shap = fig.add_subplot(gs[3])
     display_names = [f.replace("SurgeryHistory", "Surgery history") for f in EXPECTED_FEATURES]
-    feature_values = x_raw[0]  # 原始输入值用于显示
+    feature_values = x_raw[0]
 
-    # 调用我们手写的瀑布图
     draw_custom_waterfall(ax_shap, shap_vals, base_val, display_names, feature_values)
     ax_shap.set_title("Feature attribution (SHAP)", loc='left', fontsize=14, fontweight='bold', pad=15)
 
-    # ------------------ 5. 底部免责声明 ------------------
+    # 5. 底部免责声明
     ax_footer = fig.add_subplot(gs[4])
     ax_footer.axis('off')
     ax_footer.text(0.5, 0.5, "Research use and clinical decision support only. Not a medical diagnosis.",
                    ha='center', va='center', fontsize=10, color='#888', style='italic')
 
-    return fig, prob, shap_vals
+    return fig, prob
 
 
 # ============================================================
 # Streamlit UI
 # ============================================================
-st.set_page_config(page_title="Figure Generator", layout="centered")
+st.set_page_config(page_title="PDAC Figure Generator", layout="centered")
 
-st.title("📊 Web Calculator Figure Generator")
-st.markdown(
-    "This page directly generates a **publication-ready, uncropped figure** of the web calculator for your manuscript.")
+st.title("📊 Publication Figure Generator")
+st.markdown("This app generates a **publication-ready, uncropped figure** of the web calculator for your manuscript.")
 
 with st.spinner("Loading models..."):
     predict_model, raw_model, features, X_train, mean_dict, std_dict = load_artifacts()
@@ -283,19 +298,34 @@ st.write("---")
 st.subheader("2. Generate and Download")
 
 if st.button("Generate Publication Figure", type="primary"):
-    fig, prob, shap_vals = generate_publication_figure(predict_model, explainer, mean_dict, std_dict, input_data)
+    with st.spinner("Rendering high-resolution figure..."):
+        fig, prob = generate_publication_figure(predict_model, explainer, mean_dict, std_dict, input_data)
 
-    st.pyplot(fig, use_container_width=True)
+        st.pyplot(fig, use_container_width=True)
 
-    tif_path = "Figure_PDAC_Calculator.tif"
-    pdf_path = "Figure_PDAC_Calculator.pdf"
+        tif_buf = io.BytesIO()
+        pdf_buf = io.BytesIO()
 
-    fig.savefig(tif_path, dpi=300, format="tiff", pil_kwargs={"compression": "tiff_lzw"}, bbox_inches='tight')
-    fig.savefig(pdf_path, dpi=300, format="pdf", bbox_inches='tight')
+        fig.savefig(tif_buf, format="tiff", dpi=300,
+                    pil_kwargs={"compression": "tiff_lzw"},
+                    bbox_inches='tight', facecolor='white')
+        fig.savefig(pdf_buf, format="pdf", dpi=300,
+                    bbox_inches='tight', facecolor='white')
 
-    st.success(f"Figure generated successfully! (Predicted Probability: {prob * 100:.1f}%)")
+        plt.close(fig)
 
-    with open(tif_path, "rb") as f_tif, open(pdf_path, "rb") as f_pdf:
+        st.success(f"Figure generated successfully! (Predicted Probability: {prob * 100:.1f}%)")
+
         col1, col2 = st.columns(2)
-        col1.download_button("⬇️ Download TIFF (300 DPI)", f_tif, file_name=tif_path, mime="image/tiff")
-        col2.download_button("⬇️ Download PDF (Vector)", f_pdf, file_name=pdf_path, mime="application/pdf")
+        col1.download_button(
+            label="⬇️ Download TIFF (300 DPI)",
+            data=tif_buf.getvalue(),
+            file_name="Figure_PDAC_Calculator.tif",
+            mime="image/tiff"
+        )
+        col2.download_button(
+            label="⬇️ Download PDF (Vector)",
+            data=pdf_buf.getvalue(),
+            file_name="Figure_PDAC_Calculator.pdf",
+            mime="application/pdf"
+        )
