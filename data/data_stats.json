@@ -1,0 +1,9 @@
+{
+  "train_samples": 175,
+  "class_distribution": {
+    "Class 1": 73,
+    "Class 0": 102
+  },
+  "n_features": 5,
+  "model_type": "GradientBoostingClassifier"
+}

@@ -1,0 +1,5 @@
+CEA
+DBIL
+Age
+SurgeryHistory
+CA19-9
