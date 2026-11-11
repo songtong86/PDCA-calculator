@@ -35,10 +35,9 @@ plt.rcParams.update({
 CURRENT_DIR = Path(__file__).resolve().parent
 BASE_DIR = CURRENT_DIR / "data"
 
-# 【修改点 1】：将特征列表中的 SurgeryHistory 改为 Surgical history
+# 【核心修改】：特征列表更新
 EXPECTED_FEATURES = ["CEA", "DBIL", "Age", "Surgical history", "CA19-9"]
 
-# 【修改点 2】：更新单位字典键名
 BASE_UNITS = {
     "CEA": "ng/mL",
     "DBIL": "μmol/L",
@@ -47,10 +46,8 @@ BASE_UNITS = {
     "CA19-9": "U/mL",
 }
 
-# 【修改点 3】：更新二分类特征集合
 BINARY_FEATURES = {"Surgical history"}
 
-# 【修改点 4】：更新前端输入参数配置
 FEATURE_META = {
     "CEA": {"default": 2.5, "min": 0.0, "max": 1000.0},
     "DBIL": {"default": 4.0, "min": 0.0, "max": 500.0},
@@ -61,10 +58,7 @@ FEATURE_META = {
 
 LOCKED_THRESHOLD = 0.50
 
-# ============================================================
-# 内置的标准化参数 (代替巨大的 training_parameters_mice.pkl)
-# ============================================================
-# 【修改点 5】：更新均值字典键名
+# 内置的标准化参数
 MEAN_DICT = {
     "Age": 56.82857142857143,
     "Surgical history": 0.36,
@@ -73,7 +67,6 @@ MEAN_DICT = {
     "DBIL": 5.3337142857142865
 }
 
-# 【修改点 6】：更新标准差字典键名
 STD_DICT = {
     "Age": 12.706209312853336,
     "Surgical history": 0.48,
@@ -122,7 +115,6 @@ def _is_full_classifier(model, n):
 
 @st.cache_resource
 def load_artifacts():
-    # 移除 absolute paths，使用动态生成的 BASE_DIR
     raw_model_path = BASE_DIR / "best_model.pkl"
     if not raw_model_path.exists():
         st.error(f"Model file not found: {raw_model_path}. Please ensure it is in the `data` folder.")
@@ -142,7 +134,6 @@ def load_artifacts():
             predict_model = _CalibratedPredictor(raw_model, cal_obj)
             calib_msg = "post-hoc calibrated"
 
-    # 不再加载 training_parameters_mice.pkl，直接使用硬编码字典
     X_train_path = BASE_DIR / "X_train.npy"
     if not X_train_path.exists():
         st.error(f"Background data not found: {X_train_path}")
@@ -213,7 +204,6 @@ with st.container(border=True):
     with st.form("single_form"):
         cols = st.columns(2)
         raw_values = {}
-        # 【修改点 7】：更新展示顺序列表
         features_ordered = ["CEA", "CA19-9", "DBIL", "Age", "Surgical history"]
 
         for i, f in enumerate(features_ordered):
@@ -244,7 +234,9 @@ with st.container(border=True):
 
 # 计算逻辑
 if submitted:
-    x_raw = np.array([[raw_values[f] for f in feature_names]], dtype=float)
+    # 【核心修复】：使用 .get(f, 0.0) 防止 Streamlit 云端缓存未及时更新导致的 KeyError
+    x_raw = np.array([[raw_values.get(f, 0.0) for f in feature_names]], dtype=float)
+    
     x_norm = np.zeros_like(x_raw)
     for i, f in enumerate(feature_names):
         m, s = _resolve_mean_std(f, mean_dict, std_dict)
@@ -284,7 +276,6 @@ if "prob" in st.session_state:
 
     st.markdown("#### Feature attribution (SHAP)")
     shap_vals, base_val = compute_shap(explainer, x_norm)
-    # 【修改点 8】：由于原本的特征名已经修改，此处无需再次 replace
     display_names = feature_names 
 
     expl = shap.Explanation(
