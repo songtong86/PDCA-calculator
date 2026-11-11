@@ -35,22 +35,27 @@ plt.rcParams.update({
 CURRENT_DIR = Path(__file__).resolve().parent
 BASE_DIR = CURRENT_DIR / "data"
 
-EXPECTED_FEATURES = ["CEA", "DBIL", "Age", "SurgeryHistory", "CA19-9"]
+# 【修改点 1】：将特征列表中的 SurgeryHistory 改为 Surgical history
+EXPECTED_FEATURES = ["CEA", "DBIL", "Age", "Surgical history", "CA19-9"]
 
+# 【修改点 2】：更新单位字典键名
 BASE_UNITS = {
     "CEA": "ng/mL",
     "DBIL": "μmol/L",
     "Age": "years",
-    "SurgeryHistory": "",
+    "Surgical history": "",
     "CA19-9": "U/mL",
 }
-BINARY_FEATURES = {"SurgeryHistory"}
 
+# 【修改点 3】：更新二分类特征集合
+BINARY_FEATURES = {"Surgical history"}
+
+# 【修改点 4】：更新前端输入参数配置
 FEATURE_META = {
     "CEA": {"default": 2.5, "min": 0.0, "max": 1000.0},
     "DBIL": {"default": 4.0, "min": 0.0, "max": 500.0},
     "Age": {"default": 60.0, "min": 18.0, "max": 100.0},
-    "SurgeryHistory": {"default": 0, "min": 0, "max": 1},
+    "Surgical history": {"default": 0, "min": 0, "max": 1},
     "CA19-9": {"default": 15.0, "min": 0.0, "max": 1000.0},
 }
 
@@ -59,17 +64,19 @@ LOCKED_THRESHOLD = 0.50
 # ============================================================
 # 内置的标准化参数 (代替巨大的 training_parameters_mice.pkl)
 # ============================================================
+# 【修改点 5】：更新均值字典键名
 MEAN_DICT = {
     "Age": 56.82857142857143,
-    "SurgeryHistory": 0.36,
+    "Surgical history": 0.36,
     "CA19-9": 11.651157142857143,
     "CEA": 3.3454857142857146,
     "DBIL": 5.3337142857142865
 }
 
+# 【修改点 6】：更新标准差字典键名
 STD_DICT = {
     "Age": 12.706209312853336,
-    "SurgeryHistory": 0.48,
+    "Surgical history": 0.48,
     "CA19-9": 8.803011427729416,
     "CEA": 2.822665365232236,
     "DBIL": 3.0664181857333026
@@ -195,7 +202,7 @@ with st.spinner("Loading model..."):
 
 st.caption(
     f"Gradient Boosting classifier with Platt calibration · "
-    f"5 routine indicators (CEA, DBIL, Age, Surgery history, CA19-9) · "
+    f"5 routine indicators (CEA, DBIL, Age, Surgical history, CA19-9) · "
     f"TreeSHAP attribution in log-odds space · locked threshold = {LOCKED_THRESHOLD:.2f}"
 )
 
@@ -206,7 +213,8 @@ with st.container(border=True):
     with st.form("single_form"):
         cols = st.columns(2)
         raw_values = {}
-        features_ordered = ["CEA", "CA19-9", "DBIL", "Age", "SurgeryHistory"]
+        # 【修改点 7】：更新展示顺序列表
+        features_ordered = ["CEA", "CA19-9", "DBIL", "Age", "Surgical history"]
 
         for i, f in enumerate(features_ordered):
             meta = FEATURE_META[f]
@@ -276,7 +284,8 @@ if "prob" in st.session_state:
 
     st.markdown("#### Feature attribution (SHAP)")
     shap_vals, base_val = compute_shap(explainer, x_norm)
-    display_names = [f.replace("SurgeryHistory", "Surgery history") for f in feature_names]
+    # 【修改点 8】：由于原本的特征名已经修改，此处无需再次 replace
+    display_names = feature_names 
 
     expl = shap.Explanation(
         values=shap_vals,
