@@ -56,7 +56,7 @@ FEATURE_META = {
     "CA19-9": {"default": 15.0, "min": 0.0, "max": 1000.0},
 }
 
-LOCKED_THRESHOLD = 0.50
+DEFAULT_THRESHOLD = 0.50
 
 # 内置的标准化参数
 MEAN_DICT = {
@@ -236,7 +236,7 @@ with st.container(border=True):
 if submitted:
     # 【核心修复】：使用 .get(f, 0.0) 防止 Streamlit 云端缓存未及时更新导致的 KeyError
     x_raw = np.array([[raw_values.get(f, 0.0) for f in feature_names]], dtype=float)
-    
+
     x_norm = np.zeros_like(x_raw)
     for i, f in enumerate(feature_names):
         m, s = _resolve_mean_std(f, mean_dict, std_dict)
@@ -247,6 +247,25 @@ if submitted:
     st.session_state["prob"] = prob
 
 # ============================================================
+# 阈值滑动条（置于结果展示区之前，供用户动态调整决策阈值）
+# ============================================================
+if "decision_threshold" not in st.session_state:
+    st.session_state["decision_threshold"] = DEFAULT_THRESHOLD
+
+decision_threshold = st.slider(
+    "Decision threshold (PDAC probability cutoff)",
+    min_value=0.05,
+    max_value=0.95,
+    value=st.session_state["decision_threshold"],
+    step=0.01,
+    format="%.2f",
+    key="threshold_slider",
+    help="Adjust the probability cutoff for classifying a patient as High risk. "
+         "Lower values increase sensitivity; higher values increase specificity.",
+)
+st.session_state["decision_threshold"] = decision_threshold
+
+# ============================================================
 # 结果展示区
 # ============================================================
 if "prob" in st.session_state:
@@ -254,8 +273,11 @@ if "prob" in st.session_state:
     prob = st.session_state["prob"]
     x_norm = st.session_state["x_norm"]
 
-    risk_level = "High" if prob >= LOCKED_THRESHOLD else "Low"
-    color = "#d9534f" if prob >= LOCKED_THRESHOLD else "#5cb85c"
+    # 从 session_state 读取当前滑动条阈值
+    current_threshold = st.session_state["decision_threshold"]
+
+    risk_level = "High" if prob >= current_threshold else "Low"
+    color = "#d9534f" if prob >= current_threshold else "#5cb85c"
 
     st.markdown(
         f"""
@@ -267,7 +289,7 @@ if "prob" in st.session_state:
                 {prob * 100:.1f}%
             </p>
             <p style='font-size: 16px; color: {color}; margin-top: 5px;'>
-                ({risk_level} risk relative to 0.50 threshold)
+                ({risk_level} risk relative to {current_threshold:.2f} threshold)
             </p>
         </div>
         """,
@@ -276,7 +298,7 @@ if "prob" in st.session_state:
 
     st.markdown("#### Feature attribution (SHAP)")
     shap_vals, base_val = compute_shap(explainer, x_norm)
-    display_names = feature_names 
+    display_names = feature_names
 
     expl = shap.Explanation(
         values=shap_vals,
