@@ -35,7 +35,7 @@ plt.rcParams.update({
 CURRENT_DIR = Path(__file__).resolve().parent
 BASE_DIR = CURRENT_DIR / "data"
 
-# 【核心修改】：特征列表更新
+# 特征列表
 EXPECTED_FEATURES = ["CEA", "DBIL", "Age", "Surgical history", "CA19-9"]
 
 BASE_UNITS = {
@@ -56,6 +56,7 @@ FEATURE_META = {
     "CA19-9": {"default": 15.0, "min": 0.0, "max": 1000.0},
 }
 
+# 【核心修改】阈值改为可调，DEFAULT_THRESHOLD 仅作为滑动条初始值
 DEFAULT_THRESHOLD = 0.50
 
 # 内置的标准化参数
@@ -191,10 +192,12 @@ with st.spinner("Loading model..."):
      X_train, mean_dict, std_dict, calib_msg) = load_artifacts()
     explainer = build_explainer(raw_model, X_train)
 
+# 【核心修改】顶部 caption 不再引用 LOCKED_THRESHOLD
 st.caption(
     f"Gradient Boosting classifier with Platt calibration · "
     f"5 routine indicators (CEA, DBIL, Age, Surgical history, CA19-9) · "
-    f"TreeSHAP attribution in log-odds space · locked threshold = {LOCKED_THRESHOLD:.2f}"
+    f"TreeSHAP attribution in log-odds space · adjustable decision threshold "
+    f"(default = {DEFAULT_THRESHOLD:.2f})"
 )
 
 # ============================================================
@@ -234,7 +237,6 @@ with st.container(border=True):
 
 # 计算逻辑
 if submitted:
-    # 【核心修复】：使用 .get(f, 0.0) 防止 Streamlit 云端缓存未及时更新导致的 KeyError
     x_raw = np.array([[raw_values.get(f, 0.0) for f in feature_names]], dtype=float)
 
     x_norm = np.zeros_like(x_raw)
@@ -247,23 +249,23 @@ if submitted:
     st.session_state["prob"] = prob
 
 # ============================================================
-# 阈值滑动条（置于结果展示区之前，供用户动态调整决策阈值）
+# 【新增】决策阈值滑动条
+# 置于结果展示区之前、表单之外，确保拖动实时生效
 # ============================================================
-if "decision_threshold" not in st.session_state:
-    st.session_state["decision_threshold"] = DEFAULT_THRESHOLD
+if "threshold_slider" not in st.session_state:
+    st.session_state["threshold_slider"] = DEFAULT_THRESHOLD
 
+st.markdown("#### Decision threshold")
 decision_threshold = st.slider(
-    "Decision threshold (PDAC probability cutoff)",
+    "PDAC probability cutoff",
     min_value=0.05,
     max_value=0.95,
-    value=st.session_state["decision_threshold"],
     step=0.01,
     format="%.2f",
     key="threshold_slider",
     help="Adjust the probability cutoff for classifying a patient as High risk. "
          "Lower values increase sensitivity; higher values increase specificity.",
 )
-st.session_state["decision_threshold"] = decision_threshold
 
 # ============================================================
 # 结果展示区
@@ -273,8 +275,8 @@ if "prob" in st.session_state:
     prob = st.session_state["prob"]
     x_norm = st.session_state["x_norm"]
 
-    # 从 session_state 读取当前滑动条阈值
-    current_threshold = st.session_state["decision_threshold"]
+    # 【核心修改】使用滑动条的当前值进行风险分级
+    current_threshold = float(st.session_state["threshold_slider"])
 
     risk_level = "High" if prob >= current_threshold else "Low"
     color = "#d9534f" if prob >= current_threshold else "#5cb85c"
@@ -331,6 +333,11 @@ if "prob" in st.session_state:
         f"negative = {neg_sum:+.3f}; net = {net:+.3f}."
     )
 
+    st.caption(
+        f"Current decision threshold: **{current_threshold:.2f}**. "
+        f"Adjust the slider above to see how the risk classification changes."
+    )
+
 else:
     st.divider()
     st.info(
@@ -345,11 +352,13 @@ with st.expander("Usage notes and model limitations", expanded=False):
         "on imaging, no definite advanced features, and serum CA19-9 &lt; 35 U/mL "
         "at initial presentation. \"Non-elevated CA19-9\" captures both true Lewis "
         "antigen-negative nonproducers and patients with low tumor burden.\n\n"
-        "**2. Decision threshold.** Primary threshold **0.50**, locked *before* "
-        "external validation. External temporal validation (n = 112): AUC 0.7955 "
-        "(95% CI 0.6945–0.8727), sensitivity 63.04%, specificity 84.85%. "
-        "At this threshold, 56 of 66 non-PDAC patients would have been correctly "
-        "assigned a negative result. Output is for clinical reference only.\n\n"
+        "**2. Decision threshold.** The default threshold is **0.50**, locked *before* "
+        "external validation; users may adjust it interactively via the slider. "
+        "External temporal validation (n = 112): AUC 0.7955 "
+        "(95% CI 0.6945–0.8727), sensitivity 63.04%, specificity 84.85% "
+        "at the 0.50 cutoff. At this threshold, 56 of 66 non-PDAC patients would "
+        "have been correctly assigned a negative result. Output is for clinical "
+        "reference only.\n\n"
         "**3. Limitations.** Single-center retrospective development. Lewis antigen "
         "genotyping was not available. External validation in independent cohorts is "
         "required before routine clinical adoption."
