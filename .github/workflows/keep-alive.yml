@@ -1,0 +1,14 @@
+name: Keep Streamlit App Alive
+on:
+  schedule:
+    # 每6小时运行一次（UTC时间），可改为 '0 */2 * * *' 等更频繁的间隔
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # 允许在 Actions 页面手动触发
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Streamlit App
+        run: |
+          curl -s -o /dev/null -w "HTTP %{http_code}\n" https://pdca-calculator-st.streamlit.app/
